@@ -1,0 +1,217 @@
+for i in *.fastq.gz; do mv -n $i  ${i%%_*}_R1.fastq.gz; done
+for i in *.fastq.gz; do mv -n $i  ${i%%_*}_R2.fastq.gz; done
+#start qiime2 
+conda activate qiime2-2021.4
+
+
+#create folder for the analysis results 
+mkdir 00_Tools_input
+
+mkdir 01_Raw_results
+mkdir 01_Raw_results/01_Reads
+mkdir 01_Raw_results/02_Phylogeny
+mkdir 01_Raw_results/04_Taxonmy
+
+mkdir 02_Reads
+mkdir 03_Phylogeny
+mkdir 04_Alpha_analysis
+mkdir 05_PCoA
+mkdir 06_Beta_analysis
+mkdir 06_Beta_analysis/Weighted
+mkdir 06_Beta_analysis/Unweighted
+
+mkdir 07_Taxonmy
+mkdir 07_Taxonmy/01_abundance_table_g
+mkdir 07_Taxonmy/02_relative_abundance_table_g
+mkdir 07_Taxonmy/01_abundance_table_s
+mkdir 07_Taxonmy/02_relative_abundance_table_s
+mkdir 08_Differential_abundance
+mkdir 09_lefse
+
+
+#add the scripts and metadata to tools input folder 
+mv manifest.csv 00_Tools_input/manifest.csv
+mv sample_metadata.txt 00_Tools_input/sample_metadata.txt
+
+#Demuliplex
+qiime tools import  --type 'SampleData[PairedEndSequencesWithQuality]' --input-path 00_Tools_input/manifest.csv --input-format  PairedEndFastqManifestPhred33 --output-path 01_Raw_results/01_Reads/demux.qza
+
+#summerize the results of demultiplexing to visualize the qulaity of reads and determine the optimum depth 
+qiime demux summarize --i-data 01_Raw_results/01_Reads/demux.qza --o-visualization 02_Reads/demux.qzv
+
+#Denoise
+#change the trunc value for each study 
+qiime dada2 denoise-single --verbose --p-n-threads 30 --i-demultiplexed-seqs 01_Raw_results/01_Reads/demux.qza --p-trunc-len 0 --o-representative-sequences 01_Raw_results/01_Reads/rep-seqs.qza --o-table 01_Raw_results/01_Reads/table.qza --o-denoising-stats 01_Raw_results/01_Reads/table-stats.qza
+
+qiime metadata tabulate  --m-input-file 01_Raw_results/01_Reads/table-stats.qza --o-visualization 02_Reads/table-stats.qzv
+
+#summerize the results of reads and determine the optimum depth 
+qiime feature-table summarize --i-table 01_Raw_results/01_Reads/table.qza --o-visualization 02_Reads/table.qzv --m-sample-metadata-file 00_Tools_input/sample_metadata.txt
+
+#Phylogeny 
+qiime phylogeny align-to-tree-mafft-fasttree  --p-n-threads 20 --i-sequences 01_Raw_results/01_Reads/rep-seqs.qza  --o-alignment 01_Raw_results/02_Phylogeny/aligned-rep-seqs.qza  --o-masked-alignment 01_Raw_results/02_Phylogeny/masked-aligned-rep-seqs.qza  --o-tree 01_Raw_results/02_Phylogeny/unrooted-tree.qza  --o-rooted-tree 01_Raw_results/02_Phylogeny/rooted-tree.qza
+
+qiime tools export --input-path 01_Raw_results/02_Phylogeny/unrooted-tree.qza --output-path 03_Phylogeny/unrooted-tree
+
+qiime tools export --input-path 01_Raw_results/02_Phylogeny/rooted-tree.qza --output-path 03_Phylogeny/rooted-tree
+
+qiime tools export --input-path 01_Raw_results/02_Phylogeny/masked-aligned-rep-seqs.qza --output-path 01_Raw_results/02_Phylogeny/masked-aligned-dna-sequences.fasta
+
+qiime tools export --input-path 01_Raw_results/02_Phylogeny/aligned-rep-seqs.qza --output-path 01_Raw_results/02_Phylogeny/aligned-dna-sequences.fasta
+
+
+
+
+
+
+
+deep=35000
+deepMax=81000
+
+#Alpha rarefaction 
+qiime diversity alpha-rarefaction  --i-table 01_Raw_results/01_Reads/table.qza --i-phylogeny 01_Raw_results/02_Phylogeny/rooted-tree.qza --p-max-depth $deep  --m-metadata-file 00_Tools_input/sample_metadata.txt  --o-visualization 04_Alpha_analysis/alpha-rarefaction.qzv
+
+#Alpha rarefaction 
+qiime diversity alpha-rarefaction  --i-table 01_Raw_results/01_Reads/table.qza --i-phylogeny 01_Raw_results/02_Phylogeny/rooted-tree.qza --p-max-depth $deepMax  --m-metadata-file 00_Tools_input/sample_metadata.txt  --o-visualization 04_Alpha_analysis/alpha-rarefaction-max.qzv
+
+
+#Alpha diversity 
+qiime diversity core-metrics-phylogenetic --p-n-jobs-or-threads 20  --i-phylogeny 01_Raw_results/02_Phylogeny/rooted-tree.qza  --i-table 01_Raw_results/01_Reads/table.qza  --p-sampling-depth $deep  --m-metadata-file 00_Tools_input/sample_metadata.txt  --output-dir 01_Raw_results/03_core_metrics_results
+
+mv 01_Raw_results/03_core_metrics_results/bray_curtis_emperor.qzv 05_PCoA/
+mv 01_Raw_results/03_core_metrics_results/jaccard_emperor.qzv 05_PCoA/
+mv 01_Raw_results/03_core_metrics_results/unweighted_unifrac_emperor.qzv 05_PCoA/
+mv 01_Raw_results/03_core_metrics_results/weighted_unifrac_emperor.qzv 05_PCoA/
+
+
+#Faith Phylogenetic Diversity
+qiime diversity alpha-group-significance --i-alpha-diversity 01_Raw_results/03_core_metrics_results/faith_pd_vector.qza --m-metadata-file 00_Tools_input/sample_metadata.txt --o-visualization 04_Alpha_analysis/faith-pd-group-significance.qzv
+
+#evenness metrics.
+qiime diversity alpha-group-significance --i-alpha-diversity 01_Raw_results/03_core_metrics_results/evenness_vector.qza --m-metadata-file 00_Tools_input/sample_metadata.txt --o-visualization 04_Alpha_analysis/evenness-group-significance.qzv
+
+#shannon metrics.
+qiime diversity alpha-group-significance --i-alpha-diversity 01_Raw_results/03_core_metrics_results/shannon_vector.qza --m-metadata-file 00_Tools_input/sample_metadata.txt --o-visualization 04_Alpha_analysis/shannon_vector-group-significance.qzv
+
+
+qiime tools export  --input-path 04_Alpha_analysis/alpha-rarefaction.qzv --output-path 04_Alpha_analysis/alpha-rarefaction
+
+
+qiime tools export  --input-path 04_Alpha_analysis/evenness-group-significance.qzv --output-path 04_Alpha_analysis/evenness-group-significance
+
+qiime tools export  --input-path 04_Alpha_analysis/faith-pd-group-significance.qzv --output-path 04_Alpha_analysis/faith-pd-group-significance
+
+qiime tools export  --input-path 04_Alpha_analysis/shannon_vector-group-significance.qzv --output-path 04_Alpha_analysis/shannon_vector-group-significance
+
+
+
+
+
+
+
+
+#Beta diversity
+
+for beta in  Facility Source Treatment  
+do
+
+qiime diversity beta-group-significance  --i-distance-matrix 01_Raw_results/03_core_metrics_results/jaccard_distance_matrix.qza  --m-metadata-file 00_Tools_input/sample_metadata.txt  --m-metadata-column $beta  --o-visualization 06_Beta_analysis/jaccard_emperor-$beta-significance.qzv  --p-pairwise
+qiime diversity beta-group-significance  --i-distance-matrix 01_Raw_results/03_core_metrics_results/bray_curtis_distance_matrix.qza  --m-metadata-file 00_Tools_input/sample_metadata.txt  --m-metadata-column $beta  --o-visualization 06_Beta_analysis/bray_curtis_emperor-$beta-significance.qzv  --p-pairwise
+
+
+
+#Weighted
+qiime diversity beta-group-significance  --i-distance-matrix 01_Raw_results/03_core_metrics_results/weighted_unifrac_distance_matrix.qza  --m-metadata-file 00_Tools_input/sample_metadata.txt  --m-metadata-column $beta  --o-visualization 06_Beta_analysis/Weighted/weighted-unifrac-$beta-significance.qzv  --p-pairwise
+
+#Unweighted
+
+qiime diversity beta-group-significance  --i-distance-matrix 01_Raw_results/03_core_metrics_results/unweighted_unifrac_distance_matrix.qza  --m-metadata-file 00_Tools_input/sample_metadata.txt  --m-metadata-column $beta  --o-visualization 06_Beta_analysis/Unweighted/unweighted-unifrac-$beta-significance.qzv  --p-pairwise
+
+
+qiime tools export  --input-path 06_Beta_analysis/bray_curtis_emperor-$beta-significance.qzv --output-path 06_Beta_analysis/bray_curtis_$beta-significance
+qiime tools export  --input-path 06_Beta_analysis/jaccard_emperor-$beta-significance.qzv --output-path 06_Beta_analysis/jaccard_$beta-significance
+qiime tools export  --input-path 06_Beta_analysis/Unweighted/unweighted-unifrac-$beta-significance.qzv --output-path 06_Beta_analysis/unweighted-unifrac_$beta-significance
+qiime tools export  --input-path 06_Beta_analysis/Weighted/weighted-unifrac-$beta-significance.qzv --output-path 06_Beta_analysis/weighted-unifrac_$beta-significance
+
+
+done
+
+
+
+
+
+#Taxonomic analysis
+#Green_genes Full 
+qiime feature-classifier classify-sklearn --p-n-jobs 28  --i-classifier /ngs/00_Res/RefGenome/Microbiota_taxa/g_classifier.qza  --i-reads  01_Raw_results/01_Reads/rep-seqs.qza --o-classification 01_Raw_results/04_Taxonmy/g_taxonomy.qza
+
+qiime metadata tabulate --m-input-file 01_Raw_results/04_Taxonmy/g_taxonomy.qza  --o-visualization 07_Taxonmy/g_taxonomy.qzv
+
+qiime taxa barplot  --i-table 01_Raw_results/01_Reads/table.qza  --i-taxonomy 01_Raw_results/04_Taxonmy/g_taxonomy.qza  --m-metadata-file 00_Tools_input/sample_metadata.txt  --o-visualization 07_Taxonmy/g_taxa-bar-plots.qzv
+
+
+#Svila full
+qiime feature-classifier classify-sklearn --p-n-jobs 28  --i-classifier /ngs/00_Res/RefGenome/Microbiota_taxa/s_classifier.qza  --i-reads  01_Raw_results/01_Reads/rep-seqs.qza --o-classification 01_Raw_results/04_Taxonmy/s_taxonomy.qza
+
+qiime metadata tabulate --m-input-file 01_Raw_results/04_Taxonmy/s_taxonomy.qza  --o-visualization 07_Taxonmy/s_taxonomy.qzv
+
+qiime taxa barplot  --i-table 01_Raw_results/01_Reads/table.qza  --i-taxonomy 01_Raw_results/04_Taxonmy/s_taxonomy.qza  --m-metadata-file 00_Tools_input/sample_metadata.txt  --o-visualization 07_Taxonmy/s_taxa-bar-plots.qzv
+
+
+
+#export the both absoulte and relative abundance 
+
+for ta in s g 
+do 
+
+for i in {1..7} 
+do 
+	if [ $i == "1" ]; then taxaa="Kingdom"; fi
+	if [ $i == "2" ]; then taxaa="Phylum"; fi
+	if [ $i == "3" ]; then taxaa="Class"; fi
+	if [ $i == "4" ]; then taxaa="Order"; fi
+	if [ $i == "5" ]; then taxaa="Family"; fi
+	if [ $i == "6" ]; then taxaa="Genus"; fi
+	if [ $i == "7" ]; then taxaa="Species"; fi
+	 
+#absolute
+qiime taxa collapse  --i-table 01_Raw_results/01_Reads/table.qza --i-taxonomy 01_Raw_results/04_Taxonmy/"$ta"_taxonomy.qza  --p-level $i  --o-collapsed-table 01_Raw_results/01_Reads/level-$i-$taxaa-table-$ta.qza 
+qiime tools export --input-path 01_Raw_results/01_Reads/level-$i-$taxaa-table-$ta.qza --output-path 01_Raw_results/04_Taxonmy/
+biom convert -i 01_Raw_results/04_Taxonmy/feature-table.biom -o 07_Taxonmy/01_abundance_table_$ta/abs-level-$i-$taxaa-table-$ta.tsv --to-tsv
+
+#relative
+qiime feature-table relative-frequency --i-table 01_Raw_results/01_Reads/level-$i-$taxaa-table-$ta.qza --o-relative-frequency-table 01_Raw_results/01_Reads/rel-level-$i-$taxaa-table-$ta.qza
+qiime tools export --input-path 01_Raw_results/01_Reads/rel-level-$i-$taxaa-table-$ta.qza --output-path 01_Raw_results/04_Taxonmy/
+biom convert -i 01_Raw_results/04_Taxonmy/feature-table.biom -o 07_Taxonmy/02_relative_abundance_table_$ta/rel-level-$i-$taxaa-table-$ta.tsv --to-tsv
+
+done
+done
+
+
+#Ancom Differential expression
+for i in {1..7} 
+do 
+	if [ $i == "1" ]; then taxaa="Kingdom"; fi
+	if [ $i == "2" ]; then taxaa="Phylum"; fi
+	if [ $i == "3" ]; then taxaa="Class"; fi
+	if [ $i == "4" ]; then taxaa="Order"; fi
+	if [ $i == "5" ]; then taxaa="Family"; fi
+	if [ $i == "6" ]; then taxaa="Genus"; fi
+	if [ $i == "7" ]; then taxaa="Species"; fi
+
+qiime composition add-pseudocount  --i-table 01_Raw_results/01_Reads/level-$i-$taxaa-table-s.qza   --o-composition-table 01_Raw_results/01_Reads/level-$i-$taxaa-comp-table-s.qza
+
+	for comparison in Facility Source Treatment 
+	do
+	mkdir 08_Differential_abundance/$comparison
+	qiime composition ancom  --i-table 01_Raw_results/01_Reads/level-$i-$taxaa-comp-table-s.qza  --m-metadata-file 00_Tools_input/sample_metadata.txt  --m-metadata-column $comparison --o-visualization 08_Differential_abundance/$comparison/level-$i-$taxaa-ancom-$comparison-s.qzv 
+	done
+
+done
+ 
+
+
+
+
+
+
+
